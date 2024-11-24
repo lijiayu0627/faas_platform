@@ -1,11 +1,8 @@
-import json
 import uuid
-import dill
-import codecs
 import redis
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
 from req_resp_types import RegisterFnReq, RegisterFnRep, ExecuteFnReq, ExecuteFnRep, TaskStatusRep, TaskResultRep
+from serialize_deserialize import serialize, deserialize
 
 r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
@@ -19,8 +16,13 @@ def read_root():
 
 @app.post("/register_function")
 def register_function(register_fn_req: RegisterFnReq):
+    payload = register_fn_req.payload
+    try:
+        deserialize(payload)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload format")
     func_id = uuid.uuid1()
-    r.set(f'function:{func_id}', register_fn_req.payload)
+    r.set(f'function:{func_id}', payload)
     return RegisterFnRep(function_id=func_id)
 
 
@@ -35,8 +37,7 @@ def execute_function(execute_fn_req: ExecuteFnReq):
         'result': 'NO RESULT',
     }
     r.hset(f'task:{task_id}', mapping=task)
-    print(f'Publish {json.dumps(task)}')
-    r.publish('tasks', json.dumps(task))
+    r.publish('tasks', str(task_id))
     return ExecuteFnRep(task_id=task_id)
 
 
@@ -49,7 +50,7 @@ def retrieve_task_status(task_id: str):
 @app.get("/result/{task_id}")
 def fetch_task_result(task_id: str):
     status, result = r.hmget(f'task:{task_id}', ['status', 'result'])
-    return TaskResultRep(task_id=task_id, status=status, result=str(result))
+    return TaskResultRep(task_id=task_id, status=status, result=result)
 
 
 
