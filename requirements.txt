@@ -1,0 +1,9 @@
+
+dill==0.3.9
+fastapi==0.115.5
+pydantic==2.10.1
+pytest==8.3.3
+redis==5.2.0
+requests==2.32.3
+uvicorn==0.32.1
+pyzmq==26.2.0

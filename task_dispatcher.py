@@ -1,33 +1,48 @@
-import redis
-from serialize_deserialize import serialize, deserialize
+import argparse
+from multiprocessing import Pool
+from  execute_task import execute_task
+from redis_client import redis_client
 
 
-def execute_task(task_id, fn_payload, param_payload):
-    fn = deserialize(fn_payload)
-    params = deserialize(param_payload)
-    try:
-        result = fn(*params[0], **params[1])
-        task_status = 'COMPLETE'
-    except:
-        result = 'NO RESULT'
-        task_status = 'Failed'
-    return task_id, task_status, serialize(result)
+def dispatch_local(worker_num):
+    with Pool(processes=worker_num) as pool:
+        pubsub = redis_client.pubsub()
+        pubsub.subscribe('tasks')
+        print('Subscribed to task channel. Waiting for messages...')
+        try:
+            for message in pubsub.listen():
+                if message['type'] == 'message':
+                    pool.apply_async(execute_task, (message['data'],))
+        except KeyboardInterrupt:
+            print('Gracefully shutting down...')
+            pool.close()
+            pool.join()
+        finally:
+            pubsub.unsubscribe()
+            pubsub.close()
+
+
+def dispatch_pull(port):
+    pass
+
+
+def dispatch_push(port):
+    pass
 
 
 if __name__ == "__main__":
 
-    r = redis.Redis(host='localhost', port=6379, decode_responses=True)
-    pubsub = r.pubsub()
-    pubsub.subscribe('tasks')
-    print(f'Subscribed to task channel. Waiting for messages...')
+    parser = argparse.ArgumentParser(description="Task Dispatcher")
+    parser.add_argument('-m', '--mode', choices=['local', 'pull', 'push'], required=True, help='Mode: local, pull, or push')
+    parser.add_argument('-p', '--port', type=int, help='Port number, only for pull or push mode')
+    parser.add_argument('-w', '--worker', type=int, help='Number of workers, only for local mode')
+    args = parser.parse_args()
 
-    for message in pubsub.listen():
-        if message['type'] == 'message':
-            task_id = message['data']
-            r.hset(f'task:{task_id}', 'status', 'RUNNING')
-            task = r.hgetall(f'task:{task_id}')
-            print(task)
-            func_str = r.get(f'function:{task["function_id"]}')
-            task_id, status, result_payload = execute_task(task_id, func_str, task['payload'])
-            r.hset(f'task:{task_id}', 'result', result_payload)
-            r.hset(f'task:{task_id}', 'status', status)
+    if args.mode == 'local':
+        dispatch_local(args.worker)
+    elif args.mode == 'pull':
+        dispatch_pull(args.port)
+    elif args.mode == 'push':
+        dispatch_push(args.port)
+
+
