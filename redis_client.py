@@ -2,10 +2,10 @@ import uuid
 
 import redis
 
-from serialize_deserialize import deserialize
+from serialize_deserialize import deserialize, serialize
 
 pool = redis.ConnectionPool(host='localhost', port=6379, decode_responses=True)
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+my_redis = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
 
 def save_function(payload):
@@ -14,12 +14,12 @@ def save_function(payload):
     except:
         raise ValueError
     func_id = uuid.uuid1()
-    redis_client.set(f'function:{func_id}', payload)
+    my_redis.set(f'function:{func_id}', payload)
     return func_id
 
 
 def get_function(fn_id):
-    return redis_client.get(f'function:{fn_id}')
+    return my_redis.get(f'function:{fn_id}')
 
 
 def save_task(fn_id, payload):
@@ -29,20 +29,20 @@ def save_task(fn_id, payload):
         'function_id': str(fn_id),
         'status': 'QUEUED',
         'payload': payload,
-        'result': 'NO RESULT',
+        'result': serialize('NO RESULT'),
     }
-    redis_client.hset(f'task:{task_id}', mapping=task)
-    redis_client.publish('tasks', str(task_id))
+    my_redis.hset(f'task:{task_id}', mapping=task)
+    my_redis.publish('tasks', str(task_id))
     return task_id
 
 
 def get_task(task_id):
-    return redis_client.hgetall(f'task:{task_id}')
+    return my_redis.hgetall(f'task:{task_id}')
 
 
 def update_task(task_id, **kwargs):
     if 'status' in kwargs:
-        redis_client.hset(f'task:{task_id}', 'status', kwargs['status'])
+        my_redis.hset(f'task:{task_id}', 'status', kwargs['status'])
     if 'result' in kwargs:
-        redis_client.hset(f'task:{task_id}', 'result', kwargs['result'])
+        my_redis.hset(f'task:{task_id}', 'result', kwargs['result'])
 

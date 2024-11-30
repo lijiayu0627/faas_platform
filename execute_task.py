@@ -1,20 +1,20 @@
-import redis_client
+from constants import *
 from serialize_deserialize import deserialize, serialize
 
 
-def execute_task(task_id):
-    redis_client.update_task(task_id, status='RUNNING')
-    task = redis_client.get_task(task_id)
-    fn_id = task['function_id']
-    fn = deserialize(redis_client.get_function(fn_id))
-    params = deserialize(task['payload'])
+def execute_task(task_id, ser_fn, ser_params):
+    fn = deserialize(ser_fn)
+    params = deserialize(ser_params)
+    print('Input:', task_id, ser_fn, ser_params)
     try:
         result = fn(*params[0], **params[1])
-        status = 'COMPLETE'
+        status = TASK_COMPLETE
     except Exception as e:
         err_type = type(e)
-        result = f'Error: {err_type}. Detail: {e}'
-        status = 'FAILED'
+        result = f'Function Execute Error: {err_type}. Detail: {e}'
+        print(result)
+        status = TASK_FAILED
     finally:
-        redis_client.update_task(task_id, status=status, result=serialize(result))
+        print('Result:', task_id, status, serialize(result))
+        return task_id, status, serialize(result)
 
