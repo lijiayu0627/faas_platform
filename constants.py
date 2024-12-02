@@ -16,5 +16,5 @@ RECEIVED_REP = {
     'data': ''
 }
 SEND_TASK = 'SEND_TASK'
-
+Heartbeat = 'Heartbeat'
 

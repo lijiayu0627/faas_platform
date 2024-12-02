@@ -1,27 +1,13 @@
 import argparse
 import queue
+import time
+from collections import OrderedDict
+from multiprocessing import Pool, Queue, Process, Manager
 import zmq
-from multiprocessing import Pool, Queue, Process
 from serialize_deserialize import serialize, deserialize
 from execute_task import execute_task
 import redis_client
 from constants import *
-
-
-def subscriber(task_queue):
-    pubsub = redis_client.my_redis.pubsub()
-    pubsub.subscribe(REDIS_CHANNEL)
-    print('Subscribed to Redis tasks channel. Waiting for messages...')
-    try:
-        for message in pubsub.listen():
-            if message['type'] == 'message':
-                task_id = message['data']
-                task = redis_client.get_task(task_id)
-                ser_fn = redis_client.get_function(task['function_id'])
-                ser_params = task['payload']
-                task_queue.put((task_id, ser_fn, ser_params))
-    except KeyboardInterrupt:
-        raise
 
 
 def report_result(tup):
@@ -52,12 +38,28 @@ def dispatch_local(worker_num):
             pubsub.close()
 
 
+def subscribe(task_queue):
+    pubsub = redis_client.my_redis.pubsub()
+    pubsub.subscribe(REDIS_CHANNEL)
+    print('Subscribed to Redis tasks channel. Waiting for messages...')
+    try:
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                task_id = message['data']
+                task = redis_client.get_task(task_id)
+                ser_fn = redis_client.get_function(task['function_id'])
+                ser_params = task['payload']
+                task_queue.put((task_id, ser_fn, ser_params))
+    except KeyboardInterrupt:
+        raise
+
+
 def dispatch_pull(port):
 
     worker_pool = {}
 
     task_queue = Queue()
-    subscribe_process = Process(target=subscriber, args=(task_queue, ))
+    subscribe_process = Process(target=subscribe, args=(task_queue, ), daemon=True)
     subscribe_process.start()
 
     context = zmq.Context()
@@ -102,7 +104,53 @@ def dispatch_pull(port):
 
 
 def dispatch_push(port):
-    pass
+
+    worker_task_dict = OrderedDict()
+    inactive_worker = Queue()
+
+    manager = Manager()
+    worker_time_dict = manager.dict()
+
+    task_queue = Queue()
+    subscribe_process = Process(target=subscribe, args=(task_queue,), daemon=True)
+    subscribe_process.start()
+
+    context = zmq.Context()
+    router = context.socket(zmq.ROUTER)
+    router.bind(f'tcp://localhost:{port}')
+
+    while True:
+        try:
+            byte_msg = router.recv_multipart(zmq.NOBLOCK)
+            print(byte_msg)
+            worker_id = byte_msg[0].decode()
+            msg = deserialize(byte_msg[1].decode())
+            worker_time_dict[worker_id] = time.time()
+            if msg['event'] == REGISTER_WORKER:
+                worker_task_dict[worker_id] = []
+                print(f'Worker ID: {worker_id} successfully registered!')
+            elif msg['event'] == REPORT_RESULT:
+                tup = msg['data']
+                print('Report Result:', tup)
+                worker_task_dict[worker_id].remove(tup[0])
+                report_result(tup)
+        except zmq.Again:
+            pass
+        finally:
+            while not inactive_worker.empty():
+                worker_id = inactive_worker.get()
+                print(f'Worker ID: {worker_id} is inactive and will not be assigned tasks!')
+                del worker_time_dict[worker_id]
+                failed_tasks = worker_task_dict.pop(worker_id)
+                for task_id in failed_tasks:
+                    report_result((task_id, TASK_FAILED, serialize('Worker Failure')))
+            while (not task_queue.empty()) and len(worker_task_dict) != 0:
+                worker_id, tasks = worker_task_dict.popitem(last=False)
+                task = task_queue.get(block=True)
+                router.send_multipart([worker_id.encode(), serialize(task).encode()])
+                tasks.append(task[0])
+                worker_task_dict[worker_id] = tasks
+
 
 
 if __name__ == "__main__":
