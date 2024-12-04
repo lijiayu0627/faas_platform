@@ -7,7 +7,7 @@ from execute_task import execute_task
 from constants import *
 from serialize_deserialize import serialize, deserialize
 
-worker_num = int(sys.argv[1])
+process_num = int(sys.argv[1])
 dispatcher_url = sys.argv[2]
 worker_id = str(uuid.uuid1())
 
@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
     register_req = {
         'event': REGISTER_WORKER,
-        'data': ''
+        'data': process_num
     }
     try:
         dealer.send_string(serialize(register_req))
@@ -43,7 +43,7 @@ if __name__ == '__main__':
         context.term()
         sys.exit(1)
 
-    with Pool(processes=worker_num) as pool:
+    with Pool(processes=process_num) as pool:
         try:
             while True:
                 byte_msg = dealer.recv_multipart()
