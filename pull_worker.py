@@ -7,16 +7,6 @@ from execute_task import execute_task
 from constants import *
 from serialize_deserialize import serialize, deserialize
 
-worker_num = int(sys.argv[1])
-dispatcher_url = sys.argv[2]
-
-context = zmq.Context()
-req_socket = context.socket(zmq.REQ)
-req_socket.connect(dispatcher_url)
-
-lock = Lock()
-worker_id = str(uuid.uuid1())
-
 
 def fetch_task(timeout=0.01):
     time.sleep(timeout)
@@ -60,7 +50,18 @@ def shut_down(err):
     req_socket.send_string(ser_req)
     req_socket.recv_string()
 
+
 if __name__ == '__main__':
+
+    worker_num = int(sys.argv[1])
+    dispatcher_url = sys.argv[2]
+
+    context = zmq.Context()
+    req_socket = context.socket(zmq.REQ)
+    req_socket.connect(dispatcher_url)
+
+    lock = Lock()
+    worker_id = str(uuid.uuid1())
 
     register_req = {
         'event': REGISTER_WORKER,

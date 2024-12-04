@@ -2,19 +2,11 @@ import sys
 import time
 import uuid
 import zmq
-from multiprocessing import Pool
+from multiprocessing import Pool, Process
+from threading import Thread
 from execute_task import execute_task
 from constants import *
 from serialize_deserialize import serialize, deserialize
-
-process_num = int(sys.argv[1])
-dispatcher_url = sys.argv[2]
-worker_id = str(uuid.uuid1())
-
-context = zmq.Context()
-dealer = context.socket(zmq.DEALER)
-dealer.setsockopt(zmq.IDENTITY, worker_id.encode())
-dealer.connect(dispatcher_url)
 
 
 def report_result(tup):
@@ -27,7 +19,29 @@ def report_result(tup):
     dealer.send_string(ser_req)
 
 
+def heartbeat():
+    while True:
+        req = {
+            'event': Heartbeat,
+            'data': '',
+        }
+        ser_req = serialize(req)
+        dealer.send_string(ser_req)
+        print('PING')
+        time.sleep(3)
+
+
 if __name__ == '__main__':
+
+    process_num = int(sys.argv[1])
+    dispatcher_url = sys.argv[2]
+    worker_id = str(uuid.uuid1())
+    print(worker_id)
+    context = zmq.Context()
+    dealer = context.socket(zmq.DEALER)
+    dealer.setsockopt(zmq.IDENTITY, worker_id.encode())
+    dealer.connect(dispatcher_url)
+    print(worker_id.encode())
 
     register_req = {
         'event': REGISTER_WORKER,
@@ -42,6 +56,9 @@ if __name__ == '__main__':
         dealer.close()
         context.term()
         sys.exit(1)
+
+    heartbeat_thread = Thread(target=heartbeat, daemon=True)
+    heartbeat_thread.start()
 
     with Pool(processes=process_num) as pool:
         try:

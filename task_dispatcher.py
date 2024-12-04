@@ -1,7 +1,6 @@
 import argparse
 import queue
 import time
-from collections import OrderedDict
 from multiprocessing import Pool, Queue, Process, Manager
 import zmq
 from serialize_deserialize import serialize, deserialize
@@ -66,7 +65,6 @@ def check_deadline(task_deadline):
 
 
 def dispatch_pull(port, execute_time=5):
-    print(execute_time)
     worker_pool = {}
 
     task_queue = Queue()
@@ -122,15 +120,29 @@ def dispatch_pull(port, execute_time=5):
             rep_socket.send_string(serialize(RECEIVED_REP))
 
 
+def listen_to_heartbeat(worker_time, inactive_worker, interval=5):
+    while True:
+        current = time.time()
+        for worker_id, last_seen in worker_time.items():
+            print(current, worker_time[worker_id])
+            if current > last_seen + interval:
+                inactive_worker.put(worker_id)
+                del worker_time[worker_id]
+        time.sleep(1)
+
+
 def dispatch_push(port):
     worker_pool = {}
-    inactive_worker = Queue()
-    manager = Manager()
-    worker_time = manager.dict()
 
     task_queue = Queue()
     subscribe_process = Process(target=subscribe, args=(task_queue,), daemon=True)
     subscribe_process.start()
+
+    inactive_worker = Queue()
+    manager = Manager()
+    worker_time = manager.dict()
+    monitor_process = Process(target=listen_to_heartbeat, args=(worker_time, inactive_worker), daemon=True)
+    monitor_process.start()
 
     context = zmq.Context()
     router = context.socket(zmq.ROUTER)
@@ -141,19 +153,22 @@ def dispatch_push(port):
             byte_msg = router.recv_multipart(zmq.NOBLOCK)
             worker_id = byte_msg[0].decode()
             msg = deserialize(byte_msg[1].decode())
-            worker_time[worker_id] = time.time()
-            if msg['event'] == REGISTER_WORKER:
+            if worker_id in worker_pool:
+                worker_time[worker_id] = time.time()
+                print('PANG', worker_time[worker_id])
+                if msg['event'] == REPORT_RESULT:
+                    tup = msg['data']
+                    print('Report Result:', tup)
+                    report_result(tup)
+                    worker_pool[worker_id]['task_list'].remove(tup[0])
+            elif msg['event'] == REGISTER_WORKER:
                 worker_pool[worker_id] = {
                     'task_list': [],
                     'num_process': msg['data']
                 }
+                worker_time[worker_id] = time.time()
                 print(f'Worker ID: {worker_id} successfully registered!')
                 print(worker_pool)
-            elif msg['event'] == REPORT_RESULT:
-                tup = msg['data']
-                print('Report Result:', tup)
-                report_result(tup)
-                worker_pool[worker_id]['task_list'].remove(tup[0])
         except zmq.Again:
             pass
         finally:
@@ -162,7 +177,7 @@ def dispatch_push(port):
                 print(f'Worker ID: {worker_id} is inactive and will not be assigned tasks!')
                 failed_tasks = worker_pool[worker_id]['task_list']
                 for task_id in failed_tasks:
-                    report_result((task_id, TASK_FAILED, serialize('Worker Failure')))
+                    report_result((task_id, TASK_FAILED, serialize('WorkerFailure Exception: Not Receive Messages from Worker')))
                 del worker_pool[worker_id]
             while (not task_queue.empty()) and len(worker_pool) != 0:
                 next_worker_id = min(worker_pool, key=lambda x: len(worker_pool[x]['task_list']) / worker_pool[x]['num_process'])
