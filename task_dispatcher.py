@@ -54,13 +54,29 @@ def subscribe(task_queue):
         raise
 
 
-def dispatch_pull(port):
+def check_deadline(task_deadline):
+    while True:
+        current = time.time()
+        for task_id, deadline in task_deadline.items():
+            if current >= deadline:
+                print(task_deadline)
+                report_result((task_id, TASK_FAILED, serialize('WorkerFailure Exception: Fail to Complete Before the Deadline')))
+                del task_deadline[task_id]
+        time.sleep(1)
 
+
+def dispatch_pull(port, execute_time=5):
+    print(execute_time)
     worker_pool = {}
 
     task_queue = Queue()
     subscribe_process = Process(target=subscribe, args=(task_queue, ), daemon=True)
     subscribe_process.start()
+
+    manager = Manager()
+    task_deadline = manager.dict()
+    monitor_process = Process(target=check_deadline, args=(task_deadline, ), daemon=True)
+    monitor_process.start()
 
     context = zmq.Context()
     rep_socket = context.socket(zmq.REP)
@@ -85,19 +101,22 @@ def dispatch_pull(port):
                 rep_socket.send_string(serialize(task_rep))
                 worker_pool[worker_id].append(task_tup[0])
                 redis_client.update_task(task_tup[0], status=TASK_RUNNING)
+                task_deadline[task_tup[0]] = time.time() + execute_time
+                print(task_deadline)
             except queue.Empty:
                 rep_socket.send_string(serialize(RECEIVED_REP))
         elif req_msg['event'] == REPORT_RESULT:
             tup = req_msg['data']
             print('Report Result:', tup)
             worker_pool[worker_id].remove(tup[0])
-            report_result(tup)
+            if tup[0] in task_deadline:
+                report_result(tup)
             rep_socket.send_string(serialize(RECEIVED_REP))
         elif req_msg['event'] == SHUT_DOWN:
             print(f'Worker ID: {worker_id} Shut Down')
             rep_socket.send_string(serialize(RECEIVED_REP))
             for task_id in worker_pool[worker_id]:
-                report_result((task_id, TASK_FAILED, serialize('Worker Shut Down')))
+                report_result((task_id, TASK_FAILED, serialize('WorkerFailure Exception: Worker Shut Down')))
             del worker_pool[worker_id]
         else:
             rep_socket.send_string(serialize(RECEIVED_REP))
@@ -159,12 +178,16 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--mode', choices=['local', 'pull', 'push'], required=True, help='Mode: local, pull, or push')
     parser.add_argument('-p', '--port', type=int, help='Port number, only for pull or push mode')
     parser.add_argument('-w', '--worker', type=int, help='Number of workers, only for local mode')
+    parser.add_argument('-t', '--timeout', type=int, help='The upper bounder of execute time slot, only for pull mode')
     args = parser.parse_args()
 
     if args.mode == 'local':
         dispatch_local(args.worker)
     elif args.mode == 'pull':
-        dispatch_pull(args.port)
+        if args.timeout:
+            dispatch_pull(args.port, args.timeout)
+        else:
+            dispatch_pull(args.port)
     elif args.mode == 'push':
         dispatch_push(args.port)
 
