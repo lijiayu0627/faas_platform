@@ -1,3 +1,5 @@
+from multiprocessing import current_process
+
 from constants import *
 from serialize_deserialize import deserialize, serialize
 
@@ -5,7 +7,6 @@ from serialize_deserialize import deserialize, serialize
 def execute_task(task_id, ser_fn, ser_params):
     fn = deserialize(ser_fn)
     params = deserialize(ser_params)
-    print('Input:', task_id, ser_fn, ser_params)
     try:
         result = fn(*params[0], **params[1])
         status = TASK_COMPLETE
@@ -15,6 +16,6 @@ def execute_task(task_id, ser_fn, ser_params):
         print(result)
         status = TASK_FAILED
     finally:
-        print('Result:', task_id, status, serialize(result))
+        print(current_process().name, 'Result:', task_id, status, result)
         return task_id, status, serialize(result)
 

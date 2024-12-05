@@ -10,7 +10,6 @@ from serialize_deserialize import serialize, deserialize
 
 
 def report_result(tup):
-    print('Report Result:', tup)
     req = {
         'event': REPORT_RESULT,
         'data': tup,
@@ -27,7 +26,6 @@ def heartbeat():
         }
         ser_req = serialize(req)
         dealer.send_string(ser_req)
-        print('PING')
         time.sleep(3)
 
 
@@ -36,12 +34,10 @@ if __name__ == '__main__':
     process_num = int(sys.argv[1])
     dispatcher_url = sys.argv[2]
     worker_id = str(uuid.uuid1())
-    print(worker_id)
     context = zmq.Context()
     dealer = context.socket(zmq.DEALER)
     dealer.setsockopt(zmq.IDENTITY, worker_id.encode())
     dealer.connect(dispatcher_url)
-    print(worker_id.encode())
 
     register_req = {
         'event': REGISTER_WORKER,

@@ -22,12 +22,10 @@ def fetch_task(timeout=0.01):
     rep = deserialize(ser_task_rep)
     if rep['data'] == '':
         return None
-    print('Fetch Task:', rep['data'])
     return rep['data']
 
 
 def report_result(tup):
-    print('Report Result:', tup)
     req = {
         'event': REPORT_RESULT,
         'data': tup,

@@ -1,7 +1,7 @@
 import argparse
 import queue
 import time
-from multiprocessing import Pool, Queue, Process, Manager
+from multiprocessing import Pool, Queue, Process, Manager, current_process
 import zmq
 from serialize_deserialize import serialize, deserialize
 from execute_task import execute_task
@@ -9,19 +9,26 @@ import redis_client
 from constants import *
 
 
+start_time = 0
+
+
 def report_result(tup):
     task_id, status, result = tup
     redis_client.update_task(task_id, status=status, result=result)
+    print('Time Spent: ', time.time() - start_time)
 
 
 def dispatch_local(worker_num):
+    global start_time
+    pubsub = redis_client.my_redis.pubsub()
+    pubsub.subscribe('tasks')
+    print('Subscribed to task channel. Waiting for messages...')
     with Pool(processes=worker_num) as pool:
-        pubsub = redis_client.my_redis.pubsub()
-        pubsub.subscribe('tasks')
-        print('Subscribed to task channel. Waiting for messages...')
         try:
             for message in pubsub.listen():
                 if message['type'] == 'message':
+                    if start_time == 0:
+                        start_time = time.time()
                     task_id = message['data']
                     task = redis_client.get_task(task_id)
                     ser_fn = redis_client.get_function(task['function_id'])
@@ -58,13 +65,13 @@ def check_deadline(task_deadline):
         current = time.time()
         for task_id, deadline in task_deadline.items():
             if current >= deadline:
-                print(task_deadline)
                 report_result((task_id, TASK_FAILED, serialize('WorkerFailure Exception: Fail to Complete Before the Deadline')))
                 del task_deadline[task_id]
         time.sleep(1)
 
 
 def dispatch_pull(port, execute_time=5):
+    global start_time
     worker_pool = {}
 
     task_queue = Queue()
@@ -91,7 +98,8 @@ def dispatch_pull(port, execute_time=5):
         elif req_msg['event'] == FETCH_TASK:
             try:
                 task_tup = task_queue.get(block=True, timeout=0.01)
-                print('Send Task:', task_tup)
+                if start_time == 0:
+                    start_time = time.time()
                 task_rep = {
                     'event': SEND_TASK,
                     'data': task_tup
@@ -100,12 +108,10 @@ def dispatch_pull(port, execute_time=5):
                 worker_pool[worker_id].append(task_tup[0])
                 redis_client.update_task(task_tup[0], status=TASK_RUNNING)
                 task_deadline[task_tup[0]] = time.time() + execute_time
-                print(task_deadline)
             except queue.Empty:
                 rep_socket.send_string(serialize(RECEIVED_REP))
         elif req_msg['event'] == REPORT_RESULT:
             tup = req_msg['data']
-            print('Report Result:', tup)
             worker_pool[worker_id].remove(tup[0])
             if tup[0] in task_deadline:
                 report_result(tup)
@@ -124,7 +130,6 @@ def listen_to_heartbeat(worker_time, inactive_worker, interval=5):
     while True:
         current = time.time()
         for worker_id, last_seen in worker_time.items():
-            print(current, worker_time[worker_id])
             if current > last_seen + interval:
                 inactive_worker.put(worker_id)
                 del worker_time[worker_id]
@@ -132,6 +137,7 @@ def listen_to_heartbeat(worker_time, inactive_worker, interval=5):
 
 
 def dispatch_push(port):
+    global start_time
     worker_pool = {}
 
     task_queue = Queue()
@@ -155,7 +161,6 @@ def dispatch_push(port):
             msg = deserialize(byte_msg[1].decode())
             if worker_id in worker_pool:
                 worker_time[worker_id] = time.time()
-                print('PANG', worker_time[worker_id])
                 if msg['event'] == REPORT_RESULT:
                     tup = msg['data']
                     print('Report Result:', tup)
@@ -168,7 +173,6 @@ def dispatch_push(port):
                 }
                 worker_time[worker_id] = time.time()
                 print(f'Worker ID: {worker_id} successfully registered!')
-                print(worker_pool)
         except zmq.Again:
             pass
         finally:
@@ -180,10 +184,11 @@ def dispatch_push(port):
                     report_result((task_id, TASK_FAILED, serialize('WorkerFailure Exception: Not Receive Messages from Worker')))
                 del worker_pool[worker_id]
             while (not task_queue.empty()) and len(worker_pool) != 0:
+                if start_time == 0:
+                    start_time = time.time()
                 next_worker_id = min(worker_pool, key=lambda x: len(worker_pool[x]['task_list']) / worker_pool[x]['num_process'])
                 task = task_queue.get()
                 worker_pool[next_worker_id]['task_list'].append(task[0])
-                print(worker_pool)
                 router.send_multipart([next_worker_id.encode(), serialize(task).encode()])
 
 
@@ -193,7 +198,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--mode', choices=['local', 'pull', 'push'], required=True, help='Mode: local, pull, or push')
     parser.add_argument('-p', '--port', type=int, help='Port number, only for pull or push mode')
     parser.add_argument('-w', '--worker', type=int, help='Number of workers, only for local mode')
-    parser.add_argument('-t', '--timeout', type=int, help='The upper bounder of execute time slot, only for pull mode')
+    parser.add_argument('-t', '--timeout', type=int, help='The upper bounder of execute time slot for pull mode')
     args = parser.parse_args()
 
     if args.mode == 'local':
@@ -205,5 +210,4 @@ if __name__ == "__main__":
             dispatch_pull(args.port)
     elif args.mode == 'push':
         dispatch_push(args.port)
-
 
